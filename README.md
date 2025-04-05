@@ -44,7 +44,7 @@ streamlit run main4.py
 The application will start and automatically open in your default browser at http://localhost:8501.
 
 📂 Project Structure
-Copy
+```
 .
 ├── main4.py                # Main application file
 ├── g_video_gen.py          # Video generation module
@@ -54,4 +54,4 @@ Copy
 ├── media/                  # Generated media files
 ├── output/                 # Final video outputs
 └── audio/                  # Generated audio files
-
+```
