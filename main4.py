@@ -9,6 +9,18 @@ from s_quiz import (
     generate_mcqs, start_assessment, submit_answer, restart,
     analyze_performance, display_performance_charts, get_feedback_and_resources
 )
+from dashboard import dashboard_page
+from db_utils import (
+    init_db, register_user, authenticate_user, 
+    log_activity, log_video_watched, log_quiz_attempt,
+    init_chatbot_db, init_challenges_tables, migrate_challenges_tables
+)
+
+# Initialize database
+init_db()
+init_chatbot_db()
+init_challenges_tables()
+migrate_challenges_tables()
 
 # Set page config
 st.set_page_config(
@@ -16,6 +28,32 @@ st.set_page_config(
     page_icon="🐍",
     layout="wide"
 )
+
+# Custom CSS for cleaner UI
+st.markdown("""
+<style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    .stDeployButton {visibility: hidden;}
+    
+    /* Hide API key messages */
+    div.element-container:has(div[data-testid="stMarkdownContainer"] p:contains("API key")) {
+        display: none !important;
+    }
+    
+    /* Logo styling */
+    .logo-container {
+        display: flex;
+        align-items: center;
+        padding: 10px 0;
+        margin-bottom: 20px;
+    }
+    .logo-container h2 {
+        color: #1E3A8A;
+        margin: 0;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Initialize all session state variables
 def init_session_state():
@@ -37,7 +75,7 @@ def init_session_state():
         'score': 0,
         'completed': False,
         'answers': {},
-        'topic': "",  # This is the key fix - matching s_quiz.py expectation
+        'topic': "",
         'question_categories': {}
     }
     
@@ -70,29 +108,34 @@ def login_page():
 
         if submit_button:
             if username and password:
-                st.session_state.user = {"username": username}
-                st.session_state.auth_status = True
-                st.session_state.page = "dashboard"
-                st.rerun()
+                user = authenticate_user(username, password)
+                if user:
+                    st.session_state.user = user
+                    st.session_state.auth_status = True
+                    st.session_state.page = "dashboard"
+                    st.rerun()
+                else:
+                    st.error("Invalid username or password")
             else:
                 st.error("Please enter both username and password")
 
-# Dashboard page
-def dashboard_page():
-    st.title(f"Welcome, {st.session_state.user['username']}")
-    st.markdown("""
-    ### What would you like to do today?
-    - 🎥 Create custom Python tutorial videos
-    - 📝 Test your knowledge with adaptive quizzes
-    """)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Video Generator", use_container_width=True):
-            navigate_to_video_generator()
-    with col2:
-        if st.button("Quiz Generator", use_container_width=True):
-            navigate_to_quiz_generator()
+    # Registration section
+    with st.expander("New user? Register here"):
+        with st.form("register_form"):
+            new_username = st.text_input("Choose a username")
+            new_email = st.text_input("Email")
+            new_password = st.text_input("Password", type="password")
+            full_name = st.text_input("Full name (optional)")
+            register_button = st.form_submit_button("Register")
+
+            if register_button:
+                if new_username and new_email and new_password:
+                    if register_user(new_username, new_email, new_password, full_name):
+                        st.success("Registration successful! Please login.")
+                    else:
+                        st.error("Username or email already exists")
+                else:
+                    st.error("Please fill in all required fields")
 
 # Video generator page
 def video_generator_page():
@@ -113,33 +156,39 @@ def video_generator_page():
             st.session_state.audio_path = None
             st.session_state.final_video_path = None
             
-            # Generate content
+            # Step 1: Generate script
             st.session_state.script = generate_script(st.session_state.video_topic)
             
             if st.session_state.script:
+                # Step 2: Generate Manim code
                 st.session_state.manim_code = generate_manim_code(
                     st.session_state.video_topic, 
                     st.session_state.script
                 )
                 
                 if st.session_state.manim_code:
+                    # Step 3: Render animation
                     st.session_state.video_path = render_manim_animation(
                         st.session_state.manim_code, 
                         st.session_state.video_topic
                     )
                     
                     if st.session_state.video_path:
+                        # Step 4: Generate audio
                         st.session_state.audio_path = generate_audio(
                             st.session_state.script, 
                             st.session_state.video_topic
                         )
                         
                         if st.session_state.audio_path:
+                            # Step 5: Merge video and audio
                             st.session_state.final_video_path = merge_video_audio(
                                 st.session_state.video_path, 
                                 st.session_state.audio_path, 
                                 st.session_state.video_topic
                             )
+                            # Log video watched
+                            log_video_watched(st.session_state.user['id'], st.session_state.video_topic)
     
     # Display results
     if st.session_state.final_video_path:
@@ -155,7 +204,7 @@ def video_generator_page():
             )
         
         if st.button("Generate Quiz on This Topic"):
-            st.session_state.topic = st.session_state.video_topic  # Set the expected variable name
+            st.session_state.topic = st.session_state.video_topic
             navigate_to_quiz_generator()
             start_assessment()
             st.rerun()
@@ -166,7 +215,7 @@ def quiz_generator_page():
     
     if not st.session_state.questions:
         st.markdown("Test your Python knowledge with adaptive quizzes")
-        st.session_state.topic = st.text_input(  # Using the expected variable name
+        st.session_state.topic = st.text_input(
             "Enter a Python topic for the quiz",
             value=st.session_state.topic
         )
@@ -207,6 +256,19 @@ def quiz_generator_page():
         
         if st.session_state.completed:
             st.success(f"Quiz complete! Score: {st.session_state.score}/{len(st.session_state.questions)}")
+            
+            # Log quiz attempt
+            log_quiz_attempt(
+                st.session_state.user['id'],
+                st.session_state.topic,
+                st.session_state.score,
+                len(st.session_state.questions),
+                {
+                    "questions": st.session_state.questions,
+                    "answers": st.session_state.answers,
+                    "categories": st.session_state.question_categories
+                }
+            )
             
             # Performance analysis
             performance, strengths, weaknesses = analyze_performance()
@@ -253,6 +315,7 @@ else:
         
         st.markdown("---")
         if st.button("Logout"):
+            # Clear session state
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
